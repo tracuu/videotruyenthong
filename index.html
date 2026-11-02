@@ -44,7 +44,7 @@ video{width:100%;max-height:80vh;background:#000;border-radius:12px}
 <!-- ============ TRANG PHÁT VIDEO (khi quét QR) ============ -->
 <div id="player" class="hidden">
   <h1 id="ptitle">Đang tải video…</h1>
-  <video id="vid" controls playsinline autoplay></video>
+  <video id="vid" controls playsinline autoplay muted></video>
   <p id="pmsg" class="sub" style="margin-top:12px"></p>
   <a class="btn ghost" id="back" href="./" style="background:transparent;color:var(--ink);border:1px solid var(--line)">Về kho video</a>
 </div>
@@ -117,7 +117,7 @@ const cfg = () => ({ owner:$('owner').value.trim(), repo:$('repo').value.trim(),
 
 /* Đường dẫn trang này (không kèm query) để tạo link xem */
 const base = location.origin + location.pathname.replace(/index\.html$/, '');
-const watchUrl = path => base + '?v=' + encodeURIComponent(path);
+const watchUrl = path => { const b = cfg().branch; return base + '?v=' + encodeURIComponent(path) + (b !== 'main' ? '&b=' + encodeURIComponent(b) : ''); };
 
 /* ---------- Trang phát video ---------- */
 if (params.get('v')) {
@@ -128,19 +128,49 @@ if (params.get('v')) {
   $('ptitle').textContent = name;
   document.title = name;
   const v = $('vid');
-  let tries = 0;
-  const src = () => path + '?t=' + tries; // đường dẫn tương đối trên GitHub Pages
-  v.src = src();
-  v.addEventListener('error', () => {
-    // Video mới tải lên cần 1–2 phút để GitHub Pages cập nhật
-    if (tries++ < 30) {
-      $('pmsg').textContent = 'Video vừa được tải lên, GitHub đang cập nhật. Trang sẽ tự thử lại…';
-      setTimeout(() => { v.src = src(); v.load(); v.play().catch(()=>{}); }, 6000);
-    } else {
-      $('pmsg').textContent = 'Không tìm thấy video. Hãy kiểm tra lại link.';
+  v.muted = true; // điện thoại chỉ cho tự phát khi tắt tiếng
+  const g = guess, br = params.get('b') || 'main';
+  const mime = /\.webm$/i.test(path) ? 'video/webm' : /\.mov$/i.test(path) ? 'video/quicktime' : 'video/mp4';
+  // Thử lần lượt: GitHub Pages -> jsDelivr (có ngay) -> API GitHub (có ngay)
+  const sources = [
+    async () => path + '?t=' + Date.now(),
+    async () => g.owner ? `https://cdn.jsdelivr.net/gh/${g.owner}/${g.repo}@${br}/${path}` : null,
+    async () => {
+      if (!g.owner) return null;
+      const r = await fetch(`https://api.github.com/repos/${g.owner}/${g.repo}/contents/${path}?ref=${br}`,
+        { headers: { Accept: 'application/vnd.github.raw' } });
+      if (!r.ok) return null;
+      return URL.createObjectURL(new Blob([await r.blob()], { type: mime }));
+    }
+  ];
+  let idx = 0, round = 0, started = false;
+  const tryPlay = () => v.play().catch(() => {
+    $('pmsg').innerHTML = '<button id="go">Bấm để phát</button>';
+    $('go').onclick = () => { v.play(); $('pmsg').textContent = ''; };
+  });
+  async function next(){
+    if (idx >= sources.length) {
+      idx = 0;
+      if (++round > 20) { $('pmsg').textContent = 'Không tìm thấy video. Hãy kiểm tra lại link.'; return; }
+      $('pmsg').textContent = 'Video vừa tải lên, đang chờ GitHub cập nhật. Trang sẽ tự thử lại…';
+      return setTimeout(next, 6000);
+    }
+    let u = null;
+    try { u = await sources[idx++](); } catch (e) {}
+    if (!u) return next();
+    v.src = u; v.load(); tryPlay();
+  }
+  v.addEventListener('error', () => { if (!started) next(); else if (v.error) { started = false; next(); } });
+  v.addEventListener('loadeddata', () => {
+    started = true; $('pmsg').textContent = '';
+    if (v.muted) {
+      const b = document.createElement('button');
+      b.textContent = 'Bật tiếng';
+      b.onclick = () => { v.muted = false; b.remove(); };
+      $('pmsg').append(b);
     }
   });
-  v.addEventListener('loadeddata', () => { $('pmsg').textContent = ''; });
+  next();
 }
 
 /* ---------- Upload ---------- */
