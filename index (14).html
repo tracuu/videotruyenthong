@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kho video</title>
+<style>
+:root{--bg:#eef2f0;--card:#fff;--ink:#16221d;--mute:#5f6f68;--line:#d3ddd8;--accent:#0f6b4f;--accent-ink:#fff;--err:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#101815;--card:#18231e;--ink:#e6efeb;--mute:#93a59c;--line:#2a3a33;--accent:#4fd1a0;--accent-ink:#06261b;--err:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Segoe UI",system-ui,sans-serif}
+main{max-width:720px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:1.7rem;margin:0 0 4px}
+h2{font-size:1.1rem;margin:0 0 12px}
+p.sub{color:var(--mute);margin:0 0 24px}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px}
+label{display:block;font-size:.9rem;color:var(--mute);margin:12px 0 4px}
+input[type=text],input[type=password]{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font:inherit}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+button,.btn{background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:10px 16px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:wait}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#drop{border:2px dashed var(--line);border-radius:12px;padding:28px 12px;text-align:center;color:var(--mute);cursor:pointer}
+#drop.on{border-color:var(--accent);color:var(--ink)}
+progress{width:100%;height:10px;margin-top:12px}
+#msg{margin-top:12px;min-height:1.4em}
+#msg.err{color:var(--err)}
+#result{text-align:center}
+#qr{display:inline-block;background:#fff;padding:12px;border-radius:8px;margin:8px 0}
+#link{word-break:break-all;font-size:.85rem;color:var(--mute)}
+.item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 0;border-top:1px solid var(--line)}
+.item:first-child{border-top:0}
+.item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .acts{display:flex;gap:6px;flex:none}
+.item button{padding:6px 10px;font-size:.85rem}
+.hidden{display:none}
+video{width:100%;max-height:80vh;background:#000;border-radius:12px}
+</style>
+</head>
+<body>
+<main>
+
+<!-- ============ TRANG PHÁT VIDEO (khi quét QR) ============ -->
+<div id="player" class="hidden">
+  <h1 id="ptitle">Đang tải video…</h1>
+  <video id="vid" controls playsinline autoplay></video>
+  <p id="pmsg" class="sub" style="margin-top:12px"></p>
+  <a class="btn ghost" id="back" href="./" style="background:transparent;color:var(--ink);border:1px solid var(--line)">Về kho video</a>
+</div>
+
+<!-- ============ TRANG UPLOAD ============ -->
+<div id="admin">
+  <h1>Kho video</h1>
+  <p class="sub">Tải video lên, nhận mã QR. Quét mã là xem được ngay.</p>
+
+  <section>
+    <h2>Kết nối GitHub</h2>
+    <div class="row">
+      <div><label for="owner">Tài khoản GitHub</label><input type="text" id="owner" placeholder="ten-ban"></div>
+      <div><label for="repo">Tên repo</label><input type="text" id="repo" placeholder="kho-video"></div>
+    </div>
+    <div class="row">
+      <div><label for="branch">Nhánh</label><input type="text" id="branch" value="main"></div>
+      <div><label for="token">Token (fine-grained)</label><input type="password" id="token" placeholder="github_pat_..." autocomplete="off"></div>
+    </div>
+    <p style="font-size:.85rem;color:var(--mute);margin:12px 0 0">Token chỉ lưu trong trình duyệt này, cần quyền <b>Contents: Read and write</b> cho đúng repo trên.</p>
+  </section>
+
+  <section>
+    <h2>Tải video lên</h2>
+    <div id="drop" tabindex="0" role="button">Bấm để chọn video hoặc kéo thả vào đây</div>
+    <input type="file" id="file" accept="video/*" class="hidden">
+    <progress id="bar" max="100" value="0" class="hidden"></progress>
+    <div id="msg" role="status"></div>
+  </section>
+
+  <section id="result" class="hidden">
+    <h2>Quét để xem video</h2>
+    <div id="qr"></div>
+    <div id="link"></div>
+    <p style="margin:12px 0 0">
+      <button id="dl">Tải ảnh QR</button>
+      <button class="ghost" id="copy">Sao chép link</button>
+    </p>
+  </section>
+
+  <section>
+    <h2>Video đã tải</h2>
+    <div id="list"><span style="color:var(--mute)">Chưa có video nào.</span></div>
+  </section>
+</div>
+
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+
+/* ---------- Cấu hình (tự đoán từ địa chỉ GitHub Pages) ---------- */
+const guess = (() => {
+  const m = location.hostname.match(/^(.+)\.github\.io$/);
+  const repo = location.pathname.split('/').filter(Boolean)[0] || '';
+  return m ? { owner: m[1], repo: repo && !repo.includes('.') ? repo : m[1] + '.github.io' } : {};
+})();
+const store = {
+  get(k){ try { return localStorage.getItem(k) || ''; } catch(e){ return ''; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
+};
+['owner','repo','branch','token'].forEach(k => {
+  const v = store.get('kv_'+k) || guess[k] || '';
+  if (v) $(k).value = v;
+  $(k).addEventListener('change', () => { store.set('kv_'+k, $(k).value.trim()); loadList(); });
+});
+const cfg = () => ({ owner:$('owner').value.trim(), repo:$('repo').value.trim(), branch:$('branch').value.trim() || 'main', token:$('token').value.trim() });
+
+/* Đường dẫn trang này (không kèm query) để tạo link xem */
+const base = location.origin + location.pathname.replace(/index\.html$/, '');
+const watchUrl = path => base + '?v=' + encodeURIComponent(path);
+
+/* ---------- Trang phát video ---------- */
+if (params.get('v')) {
+  $('admin').classList.add('hidden');
+  $('player').classList.remove('hidden');
+  const path = params.get('v');
+  const name = path.split('/').pop().replace(/^\d+-/, '').replace(/\.[^.]+$/, '');
+  $('ptitle').textContent = name;
+  document.title = name;
+  const v = $('vid');
+  let tries = 0;
+  const src = () => path + '?t=' + tries; // đường dẫn tương đối trên GitHub Pages
+  v.src = src();
+  v.addEventListener('error', () => {
+    // Video mới tải lên cần 1–2 phút để GitHub Pages cập nhật
+    if (tries++ < 30) {
+      $('pmsg').textContent = 'Video vừa được tải lên, GitHub đang cập nhật. Trang sẽ tự thử lại…';
+      setTimeout(() => { v.src = src(); v.load(); v.play().catch(()=>{}); }, 6000);
+    } else {
+      $('pmsg').textContent = 'Không tìm thấy video. Hãy kiểm tra lại link.';
+    }
+  });
+  v.addEventListener('loadeddata', () => { $('pmsg').textContent = ''; });
+}
+
+/* ---------- Upload ---------- */
+const setMsg = (t, err) => { $('msg').textContent = t; $('msg').className = err ? 'err' : ''; };
+const drop = $('drop'), file = $('file');
+drop.onclick = () => file.click();
+drop.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } };
+['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('on'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('on'); }));
+drop.addEventListener('drop', e => { if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); });
+file.onchange = () => { if (file.files[0]) upload(file.files[0]); file.value = ''; };
+
+function toBase64(f){
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.onerror = () => rej(new Error('Không đọc được file.'));
+    r.readAsDataURL(f);
+  });
+}
+const slug = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/gi,'d')
+  .replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').toLowerCase() || 'video';
+
+function putFile(c, path, b64, onProgress){
+  // Dùng XHR để có thanh tiến trình khi gửi
+  return new Promise((res, rej) => {
+    const x = new XMLHttpRequest();
+    x.open('PUT', `https://api.github.com/repos/${c.owner}/${c.repo}/contents/${path}`);
+    x.setRequestHeader('Authorization', 'Bearer ' + c.token);
+    x.setRequestHeader('Accept', 'application/vnd.github+json');
+    x.upload.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total * 100);
+    x.onload = () => x.status < 300 ? res(JSON.parse(x.responseText)) :
+      rej(new Error(x.status === 401 ? 'Token sai hoặc hết hạn.' :
+                    x.status === 403 || x.status === 404 ? 'Không có quyền ghi vào repo. Kiểm tra token, tên repo và nhánh.' :
+                    x.status === 413 ? 'File quá lớn, GitHub giới hạn 100MB.' :
+                    'GitHub báo lỗi ' + x.status + '.'));
+    x.onerror = () => rej(new Error('Mất kết nối mạng.'));
+    x.send(JSON.stringify({ message: 'Thêm video ' + path, content: b64, branch: c.branch }));
+  });
+}
+
+async function upload(f){
+  const c = cfg();
+  if (!c.owner || !c.repo || !c.token) return setMsg('Hãy điền tài khoản, tên repo và token trước.', true);
+  if (!f.type.startsWith('video/')) return setMsg('Chỉ nhận file video.', true);
+  if (f.size > 95 * 1024 * 1024) return setMsg('Video lớn hơn 95MB. GitHub không nhận file này, hãy nén nhỏ lại.', true);
+  Object.keys(c).forEach(k => store.set('kv_'+k, c[k]));
+  $('result').classList.add('hidden');
+  $('bar').classList.remove('hidden'); $('bar').value = 0;
+  setMsg('Đang đọc file…');
+  try {
+    const b64 = await toBase64(f);
+    setMsg('Đang tải lên GitHub…');
+    const path = 'videos/' + Date.now() + '-' + slug(f.name);
+    await putFile(c, path, b64, p => $('bar').value = p);
+    setMsg('Đã tải lên. GitHub Pages cần 1–2 phút để cập nhật, QR sẽ tự thử lại khi quét.');
+    showQR(path);
+    loadList();
+  } catch (e) { setMsg(e.message, true); }
+  $('bar').classList.add('hidden');
+}
+
+/* ---------- QR ---------- */
+let currentUrl = '';
+function showQR(path){
+  currentUrl = watchUrl(path);
+  $('qr').innerHTML = '';
+  new QRCode($('qr'), { text: currentUrl, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+  $('link').textContent = currentUrl;
+  $('result').classList.remove('hidden');
+  $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+$('copy').onclick = async () => {
+  try { await navigator.clipboard.writeText(currentUrl); $('copy').textContent = 'Đã sao chép'; }
+  catch(e){ $('copy').textContent = 'Hãy chép thủ công'; }
+  setTimeout(() => $('copy').textContent = 'Sao chép link', 1800);
+};
+$('dl').onclick = () => {
+  const cv = $('qr').querySelector('canvas');
+  const src = cv ? cv.toDataURL('image/png') : $('qr').querySelector('img').src;
+  const a = document.createElement('a'); a.href = src; a.download = 'qr-video.png'; a.click();
+};
+
+/* ---------- Danh sách video ---------- */
+async function loadList(){
+  const c = cfg();
+  if (!c.owner || !c.repo) return;
+  try {
+    const r = await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}/contents/videos?ref=${encodeURIComponent(c.branch)}`);
+    if (!r.ok) return;
+    const files = (await r.json()).filter(f => f.type === 'file' && f.name !== '.gitkeep').reverse();
+    if (!files.length) return;
+    $('list').innerHTML = '';
+    files.forEach(f => {
+      const row = document.createElement('div'); row.className = 'item';
+      const nm = document.createElement('span');
+      nm.textContent = f.name.replace(/^\d+-/, '');
+      const acts = document.createElement('div'); acts.className = 'acts';
+      const qr = document.createElement('button'); qr.className = 'ghost'; qr.textContent = 'QR';
+      qr.onclick = () => showQR(f.path);
+      const w = document.createElement('a'); w.className = 'btn'; w.textContent = 'Xem';
+      w.href = watchUrl(f.path); w.style.padding = '6px 10px'; w.style.fontSize = '.85rem';
+      acts.append(qr, w); row.append(nm, acts); $('list').append(row);
+    });
+  } catch(e){}
+}
+if (!params.get('v')) loadList();
+</script>
+</body>
+</html>
