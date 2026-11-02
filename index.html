@@ -44,9 +44,8 @@ video{width:100%;max-height:80vh;background:#000;border-radius:12px}
 <!-- ============ TRANG PHÁT VIDEO (khi quét QR) ============ -->
 <div id="player" class="hidden">
   <h1 id="ptitle">Đang tải video…</h1>
-  <video id="vid" controls playsinline autoplay muted></video>
+  <video id="vid" controls playsinline autoplay></video>
   <p id="pmsg" class="sub" style="margin-top:12px"></p>
-  <a class="btn ghost" id="back" href="./" style="background:transparent;color:var(--ink);border:1px solid var(--line)">Về kho video</a>
 </div>
 
 <!-- ============ TRANG UPLOAD ============ -->
@@ -128,7 +127,7 @@ if (params.get('v')) {
   $('ptitle').textContent = name;
   document.title = name;
   const v = $('vid');
-  v.muted = true; // điện thoại chỉ cho tự phát khi tắt tiếng
+  v.muted = false;
   const g = guess, br = params.get('b') || 'main';
   const mime = /\.webm$/i.test(path) ? 'video/webm' : /\.mov$/i.test(path) ? 'video/quicktime' : 'video/mp4';
   // Thử lần lượt: GitHub Pages -> jsDelivr (có ngay) -> API GitHub (có ngay)
@@ -163,12 +162,6 @@ if (params.get('v')) {
   v.addEventListener('error', () => { if (!started) next(); else if (v.error) { started = false; next(); } });
   v.addEventListener('loadeddata', () => {
     started = true; $('pmsg').textContent = '';
-    if (v.muted) {
-      const b = document.createElement('button');
-      b.textContent = 'Bật tiếng';
-      b.onclick = () => { v.muted = false; b.remove(); };
-      $('pmsg').append(b);
-    }
   });
   next();
 }
