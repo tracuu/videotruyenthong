@@ -210,18 +210,38 @@ function putFile(c, path, b64, onProgress){
     x.onload = () => x.status < 300 ? res(JSON.parse(x.responseText)) :
       rej(new Error(x.status === 401 ? 'Token sai hoặc hết hạn.' :
                     x.status === 403 || x.status === 404 ? 'Không có quyền ghi vào repo. Kiểm tra token, tên repo và nhánh.' :
-                    x.status === 413 ? 'File quá lớn, GitHub giới hạn 100MB.' :
+                    x.status === 413 ? 'File quá lớn, GitHub không xử lý được file nặng như vậy, hãy nén xuống dưới 25MB.' :
                     'GitHub báo lỗi ' + x.status + (() => { try { return ': ' + JSON.parse(x.responseText).message; } catch (e) { return '.'; } })()));
     x.onerror = () => rej(new Error('Mất kết nối mạng.'));
     x.send(JSON.stringify({ message: 'Thêm video ' + path, content: b64, branch: c.branch }));
   });
 }
 
+async function putBig(c, path, b64, onStep){
+  const H = { Authorization: 'Bearer ' + c.token, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' };
+  const api = `https://api.github.com/repos/${c.owner}/${c.repo}/git/`;
+  const call = async (url, method, body) => {
+    const r = await fetch(api + url, { method, headers: H, body: body ? JSON.stringify(body) : undefined });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error('GitHub báo lỗi ' + r.status + (j.message ? ': ' + j.message : ''));
+    return j;
+  };
+  onStep('Đang gửi video (file nặng, có thể mất vài phút)…');
+  const ref = await call('ref/heads/' + c.branch, 'GET');
+  const parent = ref.object.sha;
+  const pc = await call('commits/' + parent, 'GET');
+  const blob = await call('blobs', 'POST', { content: b64, encoding: 'base64' });
+  onStep('Đang lưu vào repo…');
+  const tree = await call('trees', 'POST', { base_tree: pc.tree.sha, tree: [{ path, mode: '100644', type: 'blob', sha: blob.sha }] });
+  const commit = await call('commits', 'POST', { message: 'Thêm video ' + path, tree: tree.sha, parents: [parent] });
+  await call('refs/heads/' + c.branch, 'PATCH', { sha: commit.sha });
+}
+
 async function upload(f){
   const c = cfg();
   if (!c.owner || !c.repo || !c.token) return setMsg('Hãy điền tài khoản, tên repo và token trước.', true);
   if (!f.type.startsWith('video/')) return setMsg('Chỉ nhận file video.', true);
-  if (f.size > 95 * 1024 * 1024) return setMsg('Video lớn hơn 95MB. GitHub không nhận file này, hãy nén nhỏ lại.', true);
+  if (f.size > 70 * 1024 * 1024) return setMsg('Video nặng ' + Math.round(f.size / 1048576) + 'MB, vượt giới hạn 70MB của cách này. Hãy nén bớt hoặc dùng GitHub Desktop.', true);
   Object.keys(c).forEach(k => store.set('kv_'+k, c[k]));
   $('result').classList.add('hidden');
   $('bar').classList.remove('hidden'); $('bar').value = 0;
@@ -230,7 +250,8 @@ async function upload(f){
     const b64 = await toBase64(f);
     setMsg('Đang tải lên GitHub…');
     const path = 'videos/' + Date.now() + '-' + slug(f.name);
-    await putFile(c, path, b64, p => $('bar').value = p);
+    if (f.size > 20 * 1024 * 1024) { $('bar').removeAttribute('value'); await putBig(c, path, b64, setMsg); }
+    else await putFile(c, path, b64, p => $('bar').value = p);
     setMsg('Đã tải lên. GitHub Pages cần 1–2 phút để cập nhật, QR sẽ tự thử lại khi quét.');
     showQR(path);
     loadList();
