@@ -171,11 +171,47 @@ if (params.get('v')) {
     if (!u) return next();
     v.src = u; v.load(); tryPlay();
   }
-  v.addEventListener('error', () => { if (!started) next(); else if (v.error) { started = false; next(); } });
+  const chunked = /\.json$/i.test(path);
+  v.addEventListener('error', () => { if (chunked) return; if (!started) next(); else if (v.error) { started = false; next(); } });
   v.addEventListener('loadeddata', () => {
     started = true; if (!v.muted) $('pmsg').textContent = '';
   });
-  next();
+  async function playChunked(){
+    const dir = path.slice(0, path.lastIndexOf('/') + 1);
+    const getBlob = async p => {
+      const urls = [p + '?t=' + Date.now()];
+      if (g.owner) urls.push(`https://cdn.jsdelivr.net/gh/${g.owner}/${g.repo}@${br}/${p}`);
+      for (const u of urls) { try { const r = await fetch(u); if (r.ok) return await r.blob(); } catch (e) {} }
+      if (g.owner) { try {
+        const r = await fetch(`https://api.github.com/repos/${g.owner}/${g.repo}/contents/${p}?ref=${br}`, { headers: { Accept: 'application/vnd.github.raw' } });
+        if (r.ok) return await r.blob();
+      } catch (e) {} }
+      return null;
+    };
+    for (let round = 0; round < 20; round++) {
+      try {
+        const mb = await getBlob(path);
+        const m = mb && JSON.parse(await mb.text());
+        if (m) {
+          const parts = [];
+          for (let i = 1; i <= m.parts; i++) {
+            $('pmsg').textContent = 'Đang tải video… ' + i + '/' + m.parts;
+            const b = await getBlob(dir + m.id + '.p' + String(i).padStart(3, '0'));
+            if (!b) break;
+            parts.push(b);
+          }
+          if (parts.length === m.parts) {
+            v.src = URL.createObjectURL(new Blob(parts, { type: m.type || 'video/mp4' }));
+            v.load(); $('pmsg').textContent = ''; tryPlay(); return;
+          }
+        }
+      } catch (e) {}
+      $('pmsg').textContent = 'Video vừa tải lên, đang chờ GitHub cập nhật. Trang sẽ tự thử lại…';
+      await new Promise(r => setTimeout(r, 6000));
+    }
+    $('pmsg').textContent = 'Không tìm thấy video. Hãy kiểm tra lại link.';
+  }
+  if (chunked) playChunked(); else next();
 }
 
 /* ---------- Upload ---------- */
@@ -237,21 +273,37 @@ async function putBig(c, path, b64, onStep){
   await call('refs/heads/' + c.branch, 'PATCH', { sha: commit.sha });
 }
 
+const CHUNK = 12 * 1024 * 1024;   // mỗi phần 12MB (an toàn với giới hạn của GitHub)
+const MAX_SIZE = 100 * 1024 * 1024;
+const utf8b64 = t => btoa(unescape(encodeURIComponent(t)));
+
 async function upload(f){
   const c = cfg();
   if (!c.owner || !c.repo || !c.token) return setMsg('Hãy điền tài khoản, tên repo và token trước.', true);
   if (!f.type.startsWith('video/')) return setMsg('Chỉ nhận file video.', true);
-  if (f.size > 70 * 1024 * 1024) return setMsg('Video nặng ' + Math.round(f.size / 1048576) + 'MB, vượt giới hạn 70MB của cách này. Hãy nén bớt hoặc dùng GitHub Desktop.', true);
+  if (f.size > MAX_SIZE) return setMsg('Video nặng ' + Math.round(f.size / 1048576) + 'MB, vượt giới hạn 100MB. Hãy nén bớt rồi tải lại.', true);
   Object.keys(c).forEach(k => store.set('kv_'+k, c[k]));
   $('result').classList.add('hidden');
   $('bar').classList.remove('hidden'); $('bar').value = 0;
-  setMsg('Đang đọc file…');
   try {
-    const b64 = await toBase64(f);
-    setMsg('Đang tải lên GitHub…');
-    const path = 'videos/' + Date.now() + '-' + slug(f.name);
-    if (f.size > 20 * 1024 * 1024) { $('bar').removeAttribute('value'); await putBig(c, path, b64, setMsg); }
-    else await putFile(c, path, b64, p => $('bar').value = p);
+    const id = Date.now() + '-' + slug(f.name.replace(/\.[^.]+$/, ''));
+    let path;
+    if (f.size <= 18 * 1024 * 1024) {
+      // Video nhẹ: tải thẳng một file
+      setMsg('Đang tải lên GitHub…');
+      path = 'videos/' + id + '.' + (f.name.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') || 'mp4');
+      await putFile(c, path, await toBase64(f), p => $('bar').value = p);
+    } else {
+      // Video nặng: cắt thành nhiều phần, trang phát sẽ ghép lại
+      const n = Math.ceil(f.size / CHUNK);
+      for (let i = 0; i < n; i++) {
+        setMsg('Đang tải phần ' + (i + 1) + '/' + n + '… (video nặng, vui lòng đợi, đừng đóng trang)');
+        const b64 = await toBase64(f.slice(i * CHUNK, (i + 1) * CHUNK));
+        await putFile(c, 'videos/' + id + '.p' + String(i + 1).padStart(3, '0'), b64, p => $('bar').value = (i + p / 100) / n * 100);
+      }
+      path = 'videos/' + id + '.json';
+      await putFile(c, path, utf8b64(JSON.stringify({ id, name: f.name, type: f.type || 'video/mp4', parts: n })), () => {});
+    }
     setMsg('Đã tải lên. GitHub Pages cần 1–2 phút để cập nhật, QR sẽ tự thử lại khi quét.');
     showQR(path);
     loadList();
@@ -287,13 +339,13 @@ async function loadList(){
   try {
     const r = await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}/contents/videos?ref=${encodeURIComponent(c.branch)}`);
     if (!r.ok) return;
-    const files = (await r.json()).filter(f => f.type === 'file' && f.name !== '.gitkeep').reverse();
+    const files = (await r.json()).filter(f => f.type === 'file' && f.name !== '.gitkeep' && !/\.p\d+$/.test(f.name)).reverse();
     if (!files.length) return;
     $('list').innerHTML = '';
     files.forEach(f => {
       const row = document.createElement('div'); row.className = 'item';
       const nm = document.createElement('span');
-      nm.textContent = f.name.replace(/^\d+-/, '');
+      nm.textContent = f.name.replace(/^\d+-/, '').replace(/\.[^.]+$/, '');
       const acts = document.createElement('div'); acts.className = 'acts';
       const qr = document.createElement('button'); qr.className = 'ghost'; qr.textContent = 'QR';
       qr.onclick = () => showQR(f.path);
