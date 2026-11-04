@@ -143,10 +143,22 @@ if (params.get('v')) {
     }
   ];
   let idx = 0, round = 0, started = false;
-  const tryPlay = () => v.play().catch(() => {
-    $('pmsg').innerHTML = '<button id="go">Bấm để phát</button>';
-    $('go').onclick = () => { v.play(); $('pmsg').textContent = ''; };
-  });
+  // Thử phát có tiếng trước. Nếu trình duyệt chặn thì phát tạm tắt tiếng,
+  // rồi bật tiếng ngay khi người xem chạm vào bất cứ đâu trên trang.
+  const unmute = () => {
+    v.muted = false; v.volume = 1; v.play().catch(() => {});
+    $('pmsg').textContent = '';
+    ['pointerdown','touchstart','click','keydown','wheel'].forEach(e => document.removeEventListener(e, unmute, true));
+  };
+  const tryPlay = () => {
+    v.muted = false;
+    v.play().catch(() => {
+      v.muted = true;
+      v.play().catch(() => {});
+      $('pmsg').textContent = 'Chạm vào màn hình để bật tiếng.';
+      ['pointerdown','touchstart','click','keydown','wheel'].forEach(e => document.addEventListener(e, unmute, true));
+    });
+  };
   async function next(){
     if (idx >= sources.length) {
       idx = 0;
@@ -161,7 +173,7 @@ if (params.get('v')) {
   }
   v.addEventListener('error', () => { if (!started) next(); else if (v.error) { started = false; next(); } });
   v.addEventListener('loadeddata', () => {
-    started = true; $('pmsg').textContent = '';
+    started = true; if (!v.muted) $('pmsg').textContent = '';
   });
   next();
 }
@@ -199,7 +211,7 @@ function putFile(c, path, b64, onProgress){
       rej(new Error(x.status === 401 ? 'Token sai hoặc hết hạn.' :
                     x.status === 403 || x.status === 404 ? 'Không có quyền ghi vào repo. Kiểm tra token, tên repo và nhánh.' :
                     x.status === 413 ? 'File quá lớn, GitHub giới hạn 100MB.' :
-                    'GitHub báo lỗi ' + x.status + '.'));
+                    'GitHub báo lỗi ' + x.status + (() => { try { return ': ' + JSON.parse(x.responseText).message; } catch (e) { return '.'; } })()));
     x.onerror = () => rej(new Error('Mất kết nối mạng.'));
     x.send(JSON.stringify({ message: 'Thêm video ' + path, content: b64, branch: c.branch }));
   });
